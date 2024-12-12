@@ -897,7 +897,25 @@ abstract base class BaseDownloader {
         .add((task, status, progress, expectedFileSize, taskException));
   }
 
-  /// Execute one database update consumed from the [_databaseUpdates] stream
+  /// Execute one database update consumed from the [_databaseUpdates] stream.
+  ///
+  /// Updates the database record for the given [task] with the provided [status],
+  /// [progress], [expectedFileSize], and [taskException]. The update logic is
+  /// conditional based on the task's group membership and its current status.
+  ///
+  /// - If [status] is null and [progress] is provided, the existing record is
+  ///   updated with the new progress and a valid [expectedFileSize], provided
+  ///   the task is not 'paused'.
+  ///
+  /// - If [progress] is null and [status] is provided, the progress is set
+  ///   based on the [status].
+  ///
+  /// - If the task is not 'paused', update the record with the new status and
+  ///   progress, but retain the existing [expectedFileSize] if the provided
+  ///   size is invalid (-1).
+  ///
+  /// - If the task is 'paused', do not modify the stored progress or
+  ///   [expectedFileSize].
   Future<void> _consumeUpdateTaskInDatabase(
       Task task,
       TaskStatus? status,
@@ -906,16 +924,20 @@ abstract base class BaseDownloader {
       TaskException? taskException) async {
     if (trackedGroups.contains(null) || trackedGroups.contains(task.group)) {
       if (status == null && progress != null) {
-        // update existing record with progress only (provided it's not 'paused')
+        // Update existing record with progress only and update valid expectedFileSize (provided it's not 'paused')
         final existingRecord = await database.recordForId(task.taskId);
         if (existingRecord != null && progress != progressPaused) {
-          await database
-              .updateRecord(existingRecord.copyWith(progress: progress));
+          await database.updateRecord(existingRecord.copyWith(
+            progress: progress,
+            expectedFileSize: expectedFileSize != -1
+                ? expectedFileSize
+                : existingRecord.expectedFileSize,
+          ));
         }
         return;
       }
       if (progress == null && status != null) {
-        // set progress based on status
+        // Set progress based on status
         progress = switch (status) {
           TaskStatus.enqueued || TaskStatus.running => 0.0,
           TaskStatus.complete => progressComplete,
@@ -926,17 +948,29 @@ abstract base class BaseDownloader {
           TaskStatus.paused => progressPaused
         };
       }
+      // Don't modify the stored expectedFileSize
       if (status != TaskStatus.paused) {
-        await database.updateRecord(TaskRecord(
-            task, status!, progress!, expectedFileSize, taskException));
-      } else {
-        // if paused, don't modify the stored progress
         final existingRecord = await database.recordForId(task.taskId);
-        await database.updateRecord(TaskRecord(task, status!,
-            existingRecord?.progress ?? 0, expectedFileSize, taskException));
+        await database.updateRecord(TaskRecord(
+            task,
+            status!,
+            progress!,
+            existingRecord?.expectedFileSize ?? expectedFileSize,
+            taskException));
+      } else {
+        // If paused, don't modify the stored progress
+        final existingRecord = await database.recordForId(task.taskId);
+        await database.updateRecord(TaskRecord(
+          task,
+          status!,
+          existingRecord?.progress ?? 0,
+          existingRecord?.expectedFileSize ?? expectedFileSize,
+          taskException,
+        ));
       }
     }
   }
+
 
   /// Destroy - clears callbacks, updates stream and retry queue
   ///
