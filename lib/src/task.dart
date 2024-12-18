@@ -439,6 +439,12 @@ sealed class Task extends Request implements Comparable {
         return (baseDirectoryEnum, directory, filename);
       }
     }
+
+    if (Platform.isWindows) {
+      // Resolve the issue of Windows removing the drive letter.
+      return (BaseDirectory.root, absoluteDirectoryPath, filename);
+    }
+
     // if no match, return a BaseDirectory.root with the absoluteDirectory
     // minus the leading characters that designate the root (differs by platform)
     final match =
